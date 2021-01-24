@@ -25,7 +25,7 @@ pub struct PublicConfiguration {
     pub max_sector: u64,
 }
 
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct SectorVec(pub Vec<u8>);
 
 pub type SectorIdx = u64;
@@ -77,6 +77,24 @@ pub enum SystemRegisterCommandContent {
     Ack,
 }
 
+impl SystemRegisterCommandContent {
+    pub fn new_value(timestamp: u64, write_rank: u8, sector_data: SectorVec) -> Self {
+        SystemRegisterCommandContent::Value {
+            timestamp,
+            write_rank,
+            sector_data,
+        }
+    }
+
+    pub fn new_write_proc(timestamp: u64, write_rank: u8, data_to_write: SectorVec) -> Self {
+        SystemRegisterCommandContent::WriteProc {
+            timestamp,
+            write_rank,
+            data_to_write,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ClientRegisterCommandContent {
     Read,
@@ -95,6 +113,22 @@ pub struct SystemCommandHeader {
     pub msg_ident: Uuid,
     pub read_ident: u64,
     pub sector_idx: SectorIdx,
+}
+
+impl SystemCommandHeader {
+    pub fn new(
+        process_identifier: u8,
+        msg_ident: Uuid,
+        read_ident: u64,
+        sector_idx: SectorIdx,
+    ) -> Self {
+        SystemCommandHeader {
+            process_identifier,
+            msg_ident,
+            read_ident,
+            sector_idx,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -1,3 +1,4 @@
+mod atomic_register;
 mod domain;
 
 pub use crate::domain::*;
@@ -12,6 +13,7 @@ pub async fn run_register_process(config: Configuration) {
 }
 
 pub mod atomic_register_public {
+    use crate::atomic_register::atomic_register::AtomicRegisterImplementation;
     use crate::{
         ClientRegisterCommand, OperationComplete, RegisterClient, SectorsManager, StableStorage,
         SystemRegisterCommand,
@@ -39,19 +41,26 @@ pub mod atomic_register_public {
     /// And sectors must be stored in the sectors_manager instance.
     pub async fn build_atomic_register(
         self_ident: u8,
-        metadata: Box<dyn StableStorage>,
+        stable_storage: Box<dyn StableStorage>,
         register_client: Arc<dyn RegisterClient>,
         sectors_manager: Arc<dyn SectorsManager>,
         processes_count: usize,
     ) -> (Box<dyn AtomicRegister>, Option<ClientRegisterCommand>) {
-        unimplemented!()
+        AtomicRegisterImplementation::new(
+            self_ident,
+            stable_storage,
+            register_client,
+            sectors_manager,
+            processes_count,
+        )
+        .await
     }
 }
 
 pub mod sectors_manager_public {
-    use std::sync::Arc;
     use crate::{SectorIdx, SectorVec};
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     #[async_trait::async_trait]
     pub trait SectorsManager: Send + Sync {
@@ -93,7 +102,7 @@ pub mod transfer_public {
 }
 
 pub mod register_client_public {
-    use crate::SystemRegisterCommand;
+    use crate::{SystemCommandHeader, SystemRegisterCommand, SystemRegisterCommandContent};
     use std::sync::Arc;
 
     #[async_trait::async_trait]
