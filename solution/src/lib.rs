@@ -1,5 +1,6 @@
 mod atomic_register;
 mod domain;
+mod stable_storage;
 
 pub use crate::domain::*;
 pub use atomic_register_public::*;
