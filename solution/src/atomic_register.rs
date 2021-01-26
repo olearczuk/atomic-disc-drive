@@ -13,7 +13,13 @@ pub mod atomic_register {
     use uuid::Uuid;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct HeaderWithData {
+    struct DataWithRequestIdentifier {
+        request_identifier: u64,
+        data: SectorVec,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct DataWithHeader {
         header: ClientCommandHeader,
         data: SectorVec,
     }
@@ -25,7 +31,7 @@ pub mod atomic_register {
         read_ident: u64,
         writing: bool,
         // TODO: is option necessary?
-        writeval: Option<HeaderWithData>,
+        writeval: Option<DataWithHeader>,
     }
 
     pub struct AtomicRegisterImplementation {
@@ -39,7 +45,7 @@ pub mod atomic_register {
         acks: HashSet<u8>,
         reading: bool,
         // TODO: is option necessary?
-        readval: Option<HeaderWithData>,
+        readval: Option<DataWithRequestIdentifier>,
         state: AtomicRegisterStorageState,
         callback: Option<Box<dyn FnOnce(OperationComplete) + Send + Sync>>,
     }
@@ -113,15 +119,15 @@ pub mod atomic_register {
             self.readlist.clear();
             match &cmd.content {
                 Read => {
-                    self.readval = Some(HeaderWithData {
-                        header: cmd.header.clone(),
+                    self.readval = Some(DataWithRequestIdentifier {
+                        request_identifier: cmd.header.request_identifier,
                         data: SectorVec(vec![]),
                     });
                     self.reading = true;
                 }
                 Write { data } => {
-                    self.state.writeval = Some(HeaderWithData {
-                        header: cmd.header.clone(),
+                    self.state.writeval = Some(DataWithHeader {
+                        header: cmd.header,
                         data: data.clone(),
                     });
                     self.state.writing = true;
@@ -156,7 +162,7 @@ pub mod atomic_register {
                     // TODO: consider not using random msg_ident
                     let header = SystemCommandHeader::new(
                         self.self_ident,
-                        Uuid::new_v4(),
+                        cmd.header.msg_ident,
                         cmd.header.read_ident,
                         sector_idx,
                     );
@@ -180,16 +186,16 @@ pub mod atomic_register {
                         cmd.header.process_identifier,
                         (timestamp, write_rank, sector_data),
                     );
-                    if (self.reading && self.state.writing)
-                        || 2 * self.readlist.len() > self.processes_count
+                    if (self.reading || self.state.writing)
+                        && 2 * self.readlist.len() > self.processes_count
                     {
                         let readlist_cloned = self.readlist.clone();
                         let (_, (maxts, maxrank, maxdata)) = readlist_cloned
                             .iter()
                             .max_by_key(|(_, (ts, wr, _))| (ts, wr))
                             .unwrap();
-                        self.readval = Some(HeaderWithData {
-                            header: self.readval.clone().unwrap().header,
+                        self.readval = Some(DataWithRequestIdentifier {
+                            request_identifier: self.readval.clone().unwrap().request_identifier,
                             data: maxdata.clone(),
                         });
                         self.readlist.clear();
@@ -198,24 +204,27 @@ pub mod atomic_register {
                         // TODO: consider not using random msg_ident
                         let header = SystemCommandHeader::new(
                             self.self_ident,
-                            Uuid::new_v4(),
+                            cmd.header.msg_ident,
                             self.state.read_ident,
                             sector_idx,
                         );
-                        let content: SystemRegisterCommandContent;
-                        if self.reading {
-                            content = SystemRegisterCommandContent::new_write_proc(
+
+                        let content = if self.reading {
+                            SystemRegisterCommandContent::new_write_proc(
                                 *maxts,
                                 *maxrank,
                                 self.readval.clone().unwrap().data,
-                            );
+                            )
                         } else {
-                            content = SystemRegisterCommandContent::new_write_proc(
+                            SystemRegisterCommandContent::new_write_proc(
                                 *maxts + 1,
                                 self.self_ident,
                                 self.state.writeval.clone().unwrap().data,
-                            );
-                        }
+                            )
+                        };
+                        self.state.read_ident += 1;
+                        self.store_state();
+
                         let broadcast = Broadcast {
                             cmd: Arc::new(SystemRegisterCommand { header, content }),
                         };
@@ -237,7 +246,7 @@ pub mod atomic_register {
                     // TODO: consider not using random msg_ident
                     let header = SystemCommandHeader::new(
                         self.self_ident,
-                        Uuid::new_v4(),
+                        cmd.header.msg_ident,
                         cmd.header.read_ident,
                         sector_idx,
                     );
@@ -262,32 +271,36 @@ pub mod atomic_register {
                         self.acks.clear();
                         let request_identifier: u64;
                         let op_return: OperationReturn;
-                        if self.reading {
+                        let (request_identifier, op_return) = if self.reading {
                             self.reading = false;
-                            request_identifier =
-                                self.readval.clone().unwrap().header.request_identifier;
-                            op_return = OperationReturn::Read(ReadReturn {
-                                read_data: Some(self.readval.clone().unwrap().data),
-                            });
+                            (
+                                self.readval.clone().unwrap().request_identifier,
+                                OperationReturn::Read(ReadReturn {
+                                    read_data: Some(self.readval.clone().unwrap().data),
+                                }),
+                            )
                         } else {
                             self.state.writing = false;
                             self.store_state().await;
-
-                            request_identifier = self
-                                .state
-                                .writeval
-                                .clone()
-                                .unwrap()
-                                .header
-                                .request_identifier;
-                            op_return = OperationReturn::Write;
-                        }
+                            (
+                                self.state
+                                    .writeval
+                                    .clone()
+                                    .unwrap()
+                                    .header
+                                    .request_identifier,
+                                OperationReturn::Write,
+                            )
+                        };
                         let op = OperationComplete {
                             status_code: StatusCode::Ok,
                             request_identifier,
                             op_return,
                         };
-                        (self.callback.take().unwrap())(op);
+                        if self.callback.is_some() {
+                            (self.callback.take().unwrap())(op);
+                        }
+                        self.callback = None;
                     }
                 }
             }
