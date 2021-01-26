@@ -1,6 +1,7 @@
 mod atomic_register;
 mod domain;
 mod stable_storage;
+mod sectors_manager;
 
 pub use crate::domain::*;
 pub use atomic_register_public::*;
@@ -62,6 +63,7 @@ pub mod sectors_manager_public {
     use crate::{SectorIdx, SectorVec};
     use std::path::PathBuf;
     use std::sync::Arc;
+    use crate::sectors_manager::sectors_manager::SectorsManagerImplementation;
 
     #[async_trait::async_trait]
     pub trait SectorsManager: Send + Sync {
@@ -79,7 +81,7 @@ pub mod sectors_manager_public {
 
     /// Path parameter points to a directory to which this method has exclusive access.
     pub fn build_sectors_manager(path: PathBuf) -> Arc<dyn SectorsManager> {
-        unimplemented!()
+        SectorsManagerImplementation::new(path)
     }
 }
 

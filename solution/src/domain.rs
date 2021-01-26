@@ -25,6 +25,8 @@ pub struct PublicConfiguration {
     pub max_sector: u64,
 }
 
+pub const SECTOR_VEC_SIZE: usize = 4096;
+
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct SectorVec(pub Vec<u8>);
 
