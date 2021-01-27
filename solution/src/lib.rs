@@ -1,7 +1,8 @@
 mod atomic_register;
+mod serialize_deserialize;
 mod domain;
-mod stable_storage;
 mod sectors_manager;
+mod stable_storage;
 
 pub use crate::domain::*;
 pub use atomic_register_public::*;
@@ -60,10 +61,10 @@ pub mod atomic_register_public {
 }
 
 pub mod sectors_manager_public {
+    use crate::sectors_manager::sectors_manager::SectorsManagerImplementation;
     use crate::{SectorIdx, SectorVec};
     use std::path::PathBuf;
     use std::sync::Arc;
-    use crate::sectors_manager::sectors_manager::SectorsManagerImplementation;
 
     #[async_trait::async_trait]
     pub trait SectorsManager: Send + Sync {
@@ -89,18 +90,71 @@ pub mod sectors_manager_public {
 /// we just would like some hooks into your solution to asses where the problem is, should
 /// there be a problem.
 pub mod transfer_public {
+    use crate::serialize_deserialize::serialize_deserialize::{deserialize_client_command, serialize_client_command, serialize_system_command, deserialize_system_command};
     use crate::RegisterCommand;
     use std::io::{Error, Read, Write};
+    use crate::RegisterCommand::{Client, System};
+
+    const MAGIC_NUMBER: [u8; 4] = [0x61, 0x74, 0x64, 0x64];
+
+    fn get_magic_number(data: &mut dyn Read) -> Option<Error>{
+        let mut current_numbers: [u8; 4] = [0; 4];
+        if let Err(err) = data.read_exact(&mut current_numbers) {
+            return Some(err);
+        }
+        let mut buffer: [u8; 1] = [0];
+
+        loop {
+            for i in 0..4 {
+                if current_numbers[i] == MAGIC_NUMBER[i] {
+                    if i == 3 {
+                        return None;
+                    }
+                } else {
+                    break;
+                }
+            }
+            current_numbers[0] = current_numbers[1];
+            current_numbers[1] = current_numbers[2];
+            current_numbers[2] = current_numbers[3];
+            if let Err(err) = data.read_exact(&mut buffer) {
+                return Some(err);
+            }
+            current_numbers[3] = buffer[0];
+        }
+    }
 
     pub fn deserialize_register_command(data: &mut dyn Read) -> Result<RegisterCommand, Error> {
-        unimplemented!()
+        if let Some(err) = get_magic_number(data) {
+            return Err(err);
+        }
+        // getting rid of padding
+        let mut buffer: [u8; 4] = [0; 4];
+        if let Err(err) = data.read_exact(&mut buffer) {
+            return Err(err);
+        }
+        let process_identifier = buffer[2];
+        let msg_type = buffer[3];
+
+        let res = deserialize_client_command(data, msg_type);
+        if res.is_none() {
+            deserialize_system_command(data, process_identifier, msg_type)
+        } else {
+            res.unwrap()
+        }
     }
 
     pub fn serialize_register_command(
         cmd: &RegisterCommand,
         writer: &mut dyn Write,
     ) -> Result<(), Error> {
-        unimplemented!()
+        if let Err(err) = writer.write_all(&MAGIC_NUMBER) {
+            return Err(err);
+        }
+        match cmd {
+            Client(client_cmd) => serialize_client_command(client_cmd, writer),
+            System(system_cmd) => serialize_system_command(system_cmd, writer),
+        }
     }
 }
 

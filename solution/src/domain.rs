@@ -30,6 +30,12 @@ pub const SECTOR_VEC_SIZE: usize = 4096;
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct SectorVec(pub Vec<u8>);
 
+impl SectorVec {
+    pub fn new() -> Self {
+        return SectorVec([0; SECTOR_VEC_SIZE].to_vec());
+    }
+}
+
 pub type SectorIdx = u64;
 
 #[derive(Debug, Clone)]

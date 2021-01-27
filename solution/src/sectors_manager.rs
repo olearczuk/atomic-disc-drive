@@ -26,7 +26,7 @@ pub mod sectors_manager {
     impl SectorsManager for SectorsManagerImplementation {
         async fn read_data(&self, idx: SectorIdx) -> SectorVec {
             match read(&self.path, &idx.to_string()).await {
-                None => SectorVec(vec![0; SECTOR_VEC_SIZE]),
+                None => SectorVec::new(),
                 Some(vec) => SectorVec(vec[METADATA_SIZE..].to_vec()),
             }
         }
