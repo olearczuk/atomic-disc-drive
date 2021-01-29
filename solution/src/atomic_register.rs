@@ -3,7 +3,7 @@ pub mod atomic_register {
     use crate::SystemRegisterCommandContent::{Ack, ReadProc, Value, WriteProc};
     use crate::{
         AtomicRegister, Broadcast, ClientCommandHeader, ClientRegisterCommand, OperationComplete,
-        OperationReturn, ReadReturn, RegisterClient, SectorIdx, SectorVec, SectorsManager,
+        OperationReturn, ReadReturn, RegisterClient, SectorVec, SectorsManager,
         StableStorage, StatusCode, SystemCommandHeader, SystemRegisterCommand,
         SystemRegisterCommandContent,
     };
@@ -24,7 +24,7 @@ pub mod atomic_register {
         data: SectorVec,
     }
 
-    const atomicRegisterStateKey: &str = "state";
+    const ATOMIC_REGISTER_STATE_KEY: &str = "state";
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct AtomicRegisterStorageState {
@@ -58,8 +58,8 @@ pub mod atomic_register {
             sectors_manager: Arc<dyn SectorsManager>,
             processes_count: usize,
         ) -> (Box<dyn AtomicRegister>, Option<ClientRegisterCommand>) {
-            let stateVal = stable_storage.get(atomicRegisterStateKey).await;
-            let state = match stateVal {
+            let state_val = stable_storage.get(ATOMIC_REGISTER_STATE_KEY).await;
+            let state = match state_val {
                 None => AtomicRegisterStorageState {
                     read_ident: 0,
                     writing: false,
@@ -68,7 +68,7 @@ pub mod atomic_register {
                 Some(vec) => bincode::deserialize(&vec[..]).unwrap(),
             };
 
-            let mut register = Box::new(AtomicRegisterImplementation {
+            let register = Box::new(AtomicRegisterImplementation {
                 stable_storage,
                 register_client,
                 sectors_manager,
@@ -83,10 +83,10 @@ pub mod atomic_register {
             });
 
             if register.state.writing {
-                let writeval = register.state.writeval.unwrap();
+                let writeval = register.state.writeval.clone().unwrap();
                 // TODO: for sure?
-                register.state.writing = false;
-                register.state.writeval = None;
+                // register.state.writing = false;
+                // register.state.writeval = None;
                 let cmd = ClientRegisterCommand {
                     header: writeval.header,
                     content: Write {
@@ -101,8 +101,8 @@ pub mod atomic_register {
         async fn store_state(&mut self) {
             let encoded = bincode::serialize(&self.state).unwrap();
             self.stable_storage
-                .put(atomicRegisterStateKey, encoded.as_slice())
-                .await;
+                .put(ATOMIC_REGISTER_STATE_KEY, encoded.as_slice())
+                .await.unwrap();
         }
     }
 
@@ -135,10 +135,9 @@ pub mod atomic_register {
             }
             self.store_state().await;
 
-            // TODO: consider not using random msg_ident
             let header = SystemCommandHeader::new(
                 self.self_ident,
-                Uuid::new_v4(),
+                Uuid::from_u128(cmd.header.request_identifier as u128),
                 self.state.read_ident,
                 cmd.header.sector_idx,
             );
@@ -159,7 +158,6 @@ pub mod atomic_register {
                     let (timestamp, write_rank) =
                         self.sectors_manager.read_metadata(sector_idx).await;
 
-                    // TODO: consider not using random msg_ident
                     let header = SystemCommandHeader::new(
                         self.self_ident,
                         cmd.header.msg_ident,
@@ -194,22 +192,15 @@ pub mod atomic_register {
                             .iter()
                             .max_by_key(|(_, (ts, wr, _))| (ts, wr))
                             .unwrap();
-                        self.readval = Some(DataWithRequestIdentifier {
-                            request_identifier: self.readval.clone().unwrap().request_identifier,
-                            data: maxdata.clone(),
-                        });
                         self.readlist.clear();
                         self.acks.clear();
 
-                        // TODO: consider not using random msg_ident
-                        let header = SystemCommandHeader::new(
-                            self.self_ident,
-                            cmd.header.msg_ident,
-                            self.state.read_ident,
-                            sector_idx,
-                        );
-
                         let content = if self.reading {
+                            self.readval = Some(DataWithRequestIdentifier {
+                                request_identifier: self.readval.clone().unwrap().request_identifier,
+                                data: maxdata.clone(),
+                            });
+
                             SystemRegisterCommandContent::new_write_proc(
                                 *maxts,
                                 *maxrank,
@@ -223,7 +214,14 @@ pub mod atomic_register {
                             )
                         };
                         self.state.read_ident += 1;
-                        self.store_state();
+                        self.store_state().await;
+
+                        let header = SystemCommandHeader::new(
+                            self.self_ident,
+                            cmd.header.msg_ident,
+                            self.state.read_ident,
+                            sector_idx,
+                        );
 
                         let broadcast = Broadcast {
                             cmd: Arc::new(SystemRegisterCommand { header, content }),
@@ -243,7 +241,6 @@ pub mod atomic_register {
                             .await;
                     }
 
-                    // TODO: consider not using random msg_ident
                     let header = SystemCommandHeader::new(
                         self.self_ident,
                         cmd.header.msg_ident,
@@ -269,8 +266,6 @@ pub mod atomic_register {
                         && 2 * self.acks.len() > self.processes_count
                     {
                         self.acks.clear();
-                        let request_identifier: u64;
-                        let op_return: OperationReturn;
                         let (request_identifier, op_return) = if self.reading {
                             self.reading = false;
                             (

@@ -186,6 +186,9 @@ pub mod register_client_public {
 }
 
 pub mod stable_storage_public {
+    use crate::stable_storage::stable_storage::StableStorageImplementation;
+    use std::path::PathBuf;
+
     #[async_trait::async_trait]
     /// A helper trait for small amount of durable metadata needed by the register algorithm
     /// itself. Again, it is only for AtomicRegister definition. StableStorage in unit tests
@@ -194,5 +197,9 @@ pub mod stable_storage_public {
         async fn put(&mut self, key: &str, value: &[u8]) -> Result<(), String>;
 
         async fn get(&self, key: &str) -> Option<Vec<u8>>;
+    }
+
+    pub async fn build_stable_storage(path: PathBuf) -> Box<dyn StableStorage> {
+        StableStorageImplementation::new(path).await
     }
 }
