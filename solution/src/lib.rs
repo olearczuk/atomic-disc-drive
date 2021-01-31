@@ -3,6 +3,7 @@ mod serialize_deserialize;
 mod domain;
 mod sectors_manager;
 mod stable_storage;
+mod commands_executor;
 
 pub use crate::domain::*;
 pub use atomic_register_public::*;
@@ -24,7 +25,7 @@ pub mod atomic_register_public {
     use std::sync::Arc;
 
     #[async_trait::async_trait]
-    pub trait AtomicRegister {
+    pub trait AtomicRegister: Send + Sync {
         /// Send client command to the register. After it is completed, we expect
         /// callback to be called. Note that completion of client command happens after
         /// delivery of multiple system commands to the register, as the algorithm specifies.
@@ -201,5 +202,15 @@ pub mod stable_storage_public {
 
     pub async fn build_stable_storage(path: PathBuf) -> Box<dyn StableStorage> {
         StableStorageImplementation::new(path).await
+    }
+}
+
+pub mod commands_executor_public {
+    use crate::commands_executor::commands_executor::CommandsExecutor;
+    use crate::AtomicRegister;
+    use std::sync::{Mutex, Arc};
+
+    pub fn build_commands_executor(registers: Vec<Mutex<Box<dyn AtomicRegister>>>) -> Arc<CommandsExecutor> {
+        CommandsExecutor::new(registers)
     }
 }
