@@ -66,10 +66,10 @@ pub mod serialize_deserialize {
         }
     }
 
-    const READ_PROC: u8 = 0x03;
-    const VALUE: u8 = 0x04;
-    const WRITE_PROC: u8 = 0x05;
-    const ACK: u8 = 0x06;
+    pub const READ_PROC: u8 = 0x03;
+    pub const VALUE: u8 = 0x04;
+    pub const WRITE_PROC: u8 = 0x05;
+    pub const ACK: u8 = 0x06;
 
     pub fn serialize_system_command(cmd: &SystemRegisterCommand, writer: &mut dyn Write) -> Result<(), Error> {
         let mut content = vec![0, 0, cmd.header.process_identifier];

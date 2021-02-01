@@ -68,7 +68,7 @@ pub mod atomic_register {
                 Some(vec) => bincode::deserialize(&vec[..]).unwrap(),
             };
 
-            let register = Box::new(AtomicRegisterImplementation {
+            let mut register = Box::new(AtomicRegisterImplementation {
                 stable_storage,
                 register_client,
                 sectors_manager,
@@ -84,9 +84,8 @@ pub mod atomic_register {
 
             if register.state.writing {
                 let writeval = register.state.writeval.clone().unwrap();
-                // TODO: for sure?
-                // register.state.writing = false;
-                // register.state.writeval = None;
+                register.state.writing = false;
+                register.state.writeval = None;
                 let cmd = ClientRegisterCommand {
                     header: writeval.header,
                     content: Write {

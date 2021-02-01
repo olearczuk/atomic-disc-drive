@@ -4,6 +4,9 @@ mod domain;
 mod sectors_manager;
 mod stable_storage;
 mod commands_executor;
+mod register_client;
+mod run_register_process;
+
 
 pub use crate::domain::*;
 pub use atomic_register_public::*;
@@ -11,9 +14,36 @@ pub use register_client_public::*;
 pub use sectors_manager_public::*;
 pub use stable_storage_public::*;
 pub use transfer_public::*;
+use std::convert::TryInto;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::unbounded_channel;
+use crate::run_register_process::run_register_process::{get_commands_executor_and_pending_cmd, handle_external_command, handle_internal_commands};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+const REGISTERS_NUMBER: usize = 1;
 
 pub async fn run_register_process(config: Configuration) {
-    unimplemented!()
+    let self_ident = config.public.self_rank;
+    let (host, port) = &config.public.tcp_locations[self_ident as usize - 1];
+    let tcp_listener = TcpListener::bind((host.as_str(), *port)).await.unwrap();
+
+    let (sender, receiver) = unbounded_channel();
+    // TODO - start pending commands
+    let (commands_executor, pending_cmds) =
+        get_commands_executor_and_pending_cmd(&config, sender, REGISTERS_NUMBER).await;
+
+    handle_internal_commands(commands_executor.clone(), receiver);
+
+    loop {
+        let (stream, s) = tcp_listener.accept().await.unwrap();
+        let (read_stream, write) = stream.into_split();
+        let write_stream = Arc::new(Mutex::new(write));
+
+        handle_external_command(commands_executor.clone(), read_stream, write_stream,
+            config.hmac_system_key.clone(), config.hmac_client_key.clone(),
+            config.public.max_sector);
+    }
 }
 
 pub mod atomic_register_public {
@@ -91,51 +121,20 @@ pub mod sectors_manager_public {
 /// we just would like some hooks into your solution to asses where the problem is, should
 /// there be a problem.
 pub mod transfer_public {
-    use crate::serialize_deserialize::serialize_deserialize::{deserialize_client_command, serialize_client_command, serialize_system_command, deserialize_system_command};
-    use crate::RegisterCommand;
+    use crate::serialize_deserialize::serialize_deserialize::{deserialize_client_command, serialize_client_command,
+        serialize_system_command, deserialize_system_command};
+    use crate::{RegisterCommand, MAGIC_NUMBER, OperationComplete, OperationReturn, ReadReturn};
     use std::io::{Error, Read, Write};
     use crate::RegisterCommand::{Client, System};
 
-    const MAGIC_NUMBER: [u8; 4] = [0x61, 0x74, 0x64, 0x64];
-
-    fn get_magic_number(data: &mut dyn Read) -> Option<Error>{
-        let mut current_numbers: [u8; 4] = [0; 4];
-        if let Err(err) = data.read_exact(&mut current_numbers) {
-            return Some(err);
-        }
-        let mut buffer: [u8; 1] = [0];
-
-        loop {
-            for i in 0..4 {
-                if current_numbers[i] == MAGIC_NUMBER[i] {
-                    if i == 3 {
-                        return None;
-                    }
-                } else {
-                    break;
-                }
-            }
-            current_numbers[0] = current_numbers[1];
-            current_numbers[1] = current_numbers[2];
-            current_numbers[2] = current_numbers[3];
-            if let Err(err) = data.read_exact(&mut buffer) {
-                return Some(err);
-            }
-            current_numbers[3] = buffer[0];
-        }
-    }
-
     pub fn deserialize_register_command(data: &mut dyn Read) -> Result<RegisterCommand, Error> {
-        if let Some(err) = get_magic_number(data) {
-            return Err(err);
-        }
-        // getting rid of padding
-        let mut buffer: [u8; 4] = [0; 4];
+        // getting rid of padding and magic nuber
+        let mut buffer: [u8; 8] = [0; 8];
         if let Err(err) = data.read_exact(&mut buffer) {
             return Err(err);
         }
-        let process_identifier = buffer[2];
-        let msg_type = buffer[3];
+        let process_identifier = buffer[6];
+        let msg_type = buffer[7];
 
         let res = deserialize_client_command(data, msg_type);
         if res.is_none() {
@@ -157,11 +156,26 @@ pub mod transfer_public {
             System(system_cmd) => serialize_system_command(system_cmd, writer),
         }
     }
+
+    pub(crate) fn serialize_response(op_complete: &OperationComplete, msg_type: u8) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&MAGIC_NUMBER);
+        msg.extend_from_slice(&[0, 0, op_complete.status_code as u8, 0x40 + msg_type]);
+        msg.extend_from_slice(&op_complete.request_identifier.to_be_bytes());
+        if let OperationReturn::Read(ReadReturn { read_data }) = &op_complete.op_return {
+            if let Some(data) = read_data {
+                msg.extend_from_slice(data.0.as_slice());
+            }
+        }
+        msg
+    }
 }
 
 pub mod register_client_public {
-    use crate::{SystemCommandHeader, SystemRegisterCommand, SystemRegisterCommandContent};
+    use crate::{SystemRegisterCommand};
     use std::sync::Arc;
+    use crate::register_client::register_client::RegisterClientImplementation;
+    use tokio::sync::mpsc::UnboundedSender;
 
     #[async_trait::async_trait]
     /// We do not need any public implementation of this trait. It is there for use
@@ -183,6 +197,11 @@ pub mod register_client_public {
         pub cmd: Arc<SystemRegisterCommand>,
         /// Identifier of the target process. Those start at 1.
         pub target: usize,
+    }
+
+    pub fn build_register_client(self_ident: u8, hmac_system_key: [u8; 64], tcp_locations: Vec<(String, u16)>,
+                                 self_sender: UnboundedSender<SystemRegisterCommand>) -> Arc<dyn RegisterClient> {
+        Arc::new(RegisterClientImplementation::new(self_ident, hmac_system_key, tcp_locations, self_sender))
     }
 }
 
@@ -208,9 +227,10 @@ pub mod stable_storage_public {
 pub mod commands_executor_public {
     use crate::commands_executor::commands_executor::CommandsExecutor;
     use crate::AtomicRegister;
-    use std::sync::{Mutex, Arc};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
-    pub fn build_commands_executor(registers: Vec<Mutex<Box<dyn AtomicRegister>>>) -> Arc<CommandsExecutor> {
-        CommandsExecutor::new(registers)
+    pub fn build_commands_executor(registers: Vec<Mutex<Box<dyn AtomicRegister>>>, max_sector: u64) -> Arc<CommandsExecutor> {
+        CommandsExecutor::new(registers, max_sector)
     }
 }
