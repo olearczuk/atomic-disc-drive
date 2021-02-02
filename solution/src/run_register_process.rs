@@ -14,10 +14,13 @@ pub mod run_register_process {
     use crate::serialize_deserialize::serialize_deserialize::{READ, WRITE, READ_PROC, WRITE_PROC, VALUE, ACK};
     use hmac::{Hmac, Mac, NewMac};
     use sha2::Sha256;
+    use crate::register_client::register_client::PendingCommandsManager;
+    use uuid::Uuid;
 
     type HmacSha256 = Hmac<Sha256>;
 
-    pub fn handle_external_command(commands_executor: Arc<CommandsExecutor>, mut read_stream: OwnedReadHalf,
+    pub fn handle_external_command(commands_executor: Arc<CommandsExecutor>, pending_cmds_manager: Arc<PendingCommandsManager>,
+                                   mut read_stream: OwnedReadHalf,
                                    write_stream: Arc<Mutex<OwnedWriteHalf>>, hmac_system_key: [u8; 64],
                                    hmac_client_key: [u8; 32], max_sector: u64) {
         tokio::spawn(async move {
@@ -30,6 +33,7 @@ pub mod run_register_process {
                     Ok(_) => {
                         handle_single_external_request(
                             commands_executor.clone(),
+                            pending_cmds_manager.clone(),
                             &mut read_stream,
                             write_stream.clone(),
                             hmac_system_key.clone(),
@@ -43,7 +47,8 @@ pub mod run_register_process {
         });
     }
 
-    async fn handle_single_external_request(commands_executor: Arc<CommandsExecutor>, read_stream: &mut OwnedReadHalf,
+    async fn handle_single_external_request(commands_executor: Arc<CommandsExecutor>, pending_cmds_manager: Arc<PendingCommandsManager>,
+                                            read_stream: &mut OwnedReadHalf,
                                             write_stream: Arc<Mutex<OwnedWriteHalf>>, hmac_system_key: [u8; 64],
                                             hmac_client_key: [u8; 32], max_sector: u64) -> Result<()> {
         let mut buffer = [0; 4];
@@ -99,9 +104,12 @@ pub mod run_register_process {
                 } else {
                     let write_stream_callback = write_stream.clone();
                     let commands_executor_callback = commands_executor.clone();
+                    let pending_cmds_manager_cloned = pending_cmds_manager.clone();
                     let callback: Box<dyn FnOnce(OperationComplete) + Send + Sync> =
                         Box::new(move |op_complete| {
                             tokio::spawn(async move {
+                                let msg_ident = Uuid::from_u128(op_complete.request_identifier as u128);
+                                pending_cmds_manager_cloned.remove_pending_cmd(msg_ident).await;
                                 respond(
                                     commands_executor_callback,
                                     &op_complete,
@@ -109,7 +117,7 @@ pub mod run_register_process {
                                     msg_type,
                                     hmac_client_key
                                 ).await.unwrap_or_else(|err|
-                                    log::error!("Error while sending respond message in callback: {}", err))
+                                    log::error!("Error while sending respond message in callback: {}", err));
                             });
                         });
                     commands_executor.execute_client_command(cmd, callback).await;
@@ -175,16 +183,18 @@ pub mod run_register_process {
     }
 
     pub async fn get_commands_executor_and_pending_cmd(config: &Configuration, sender: UnboundedSender<SystemRegisterCommand>,
-        registers_number: usize) -> (Arc<CommandsExecutor>, Vec<ClientRegisterCommand>) {
+        registers_number: usize) -> (Arc<CommandsExecutor>, Vec<ClientRegisterCommand>, Arc<PendingCommandsManager>) {
         let processes_count = config.public.tcp_locations.len();
         let self_ident = config.public.self_rank;
         let storage_dir = config.public.storage_dir.clone();
 
+        let pending_cmds_manager = PendingCommandsManager::new();
         let register_client = build_register_client(
             self_ident,
             config.hmac_system_key.clone(),
             config.public.tcp_locations.clone(),
             sender,
+            pending_cmds_manager.clone(),
         );
         let sectors_manager = build_sectors_manager(storage_dir.clone());
 
@@ -208,6 +218,6 @@ pub mod run_register_process {
             }
         }
         let commands_executor = build_commands_executor(registers, config.public.max_sector);
-        (commands_executor, pending_cmds)
+        (commands_executor, pending_cmds, pending_cmds_manager)
     }
 }

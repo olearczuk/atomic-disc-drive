@@ -14,6 +14,29 @@ pub mod register_client {
 
     type HmacSha256 = Hmac<Sha256>;
 
+    pub struct PendingCommandsManager {
+        /// the most actual command per msg_ident (replaying them might save atomic registers from hanging)
+        pending_cmds: Mutex<HashMap<Uuid, SystemRegisterCommand>>
+    }
+
+    impl PendingCommandsManager {
+        pub fn new() -> Arc<Self> {
+            Arc::new(Self {
+                pending_cmds: Mutex::new(HashMap::new()),
+            })
+        }
+        async fn add_pending_cmd(&self, cmd: SystemRegisterCommand) {
+            self.pending_cmds.lock().await.insert(cmd.header.msg_ident, cmd);
+        }
+
+        pub async fn remove_pending_cmd(&self, msg_ident: Uuid) {
+            self.pending_cmds.lock().await.remove(&msg_ident);
+        }
+    }
+
+    /// RegisterClientImplementation is responsible for sending messages to other processes in the system.
+    /// Additionally, it is respnsible for keeping connections alive, which means that if connection to a certain process
+    /// is lost, it has to reopen it in the future.
     pub struct RegisterClientImplementation {
         self_ident: u8,
         hmac_system_key: [u8; 64],
@@ -22,20 +45,19 @@ pub mod register_client {
         tcp_addresses: Vec<(String, u16)>,
         /// channel used for sending messages to itself
         self_sender: UnboundedSender<SystemRegisterCommand>,
-        /// the most actual command per msg_ident (replaying them might save atomic registers from hanging)
-        pending_cmds: Mutex<HashMap<Uuid, SystemRegisterCommand>>
+        pending_cmds_manager: Arc<PendingCommandsManager>,
     }
 
     impl RegisterClientImplementation {
         pub fn new(self_ident: u8, hmac_system_key: [u8; 64], tcp_addresses: Vec<(String, u16)>,
-                   self_sender: UnboundedSender<SystemRegisterCommand>) -> Arc<Self> {
+                   self_sender: UnboundedSender<SystemRegisterCommand>, pending_cmds_manager: Arc<PendingCommandsManager>) -> Arc<Self> {
             let register_client = Arc::new(Self {
                 self_ident,
                 hmac_system_key,
                 tcp_streams: (0..tcp_addresses.len()).map(|_| Mutex::new(None)).collect(),
                 tcp_addresses,
                 self_sender,
-                pending_cmds: Mutex::new(HashMap::new()),
+                pending_cmds_manager,
             });
 
             let register_client_cloned = register_client.clone();
@@ -65,9 +87,8 @@ pub mod register_client {
                             Ok(result) => {
                                 match result {
                                     Ok(mut tcp_stream) => {
-                                        let pending_cmd = self.pending_cmds.lock().await;
                                         let mut error_counter = 0;
-                                        for cmd in pending_cmd.values() {
+                                        for cmd in self.pending_cmds_manager.pending_cmds.lock().await.values() {
                                             let new_msg = crate::Send {
                                                 cmd: Arc::new(cmd.clone()),
                                                 target: target,
@@ -117,19 +138,18 @@ pub mod register_client {
                     log::error!("Error while sending to itself {}",  err));
             } else {
                 let mut stream = self.tcp_streams[target - 1].lock().await;
+                let cmd = msg.cmd.as_ref().clone();
                 match stream.as_mut() {
                     Some(tcp_stream) => {
-                        let cmd = msg.cmd.as_ref().clone();
-                        let msg_ident = msg.cmd.header.msg_ident;
                         // problem with connection - let monitor_connections take care of that
                         if let Err(err) = self.send_stream(tcp_stream, msg).await {
                             log::error!("[target: {}], Error while sending {}", target, err);
                             *stream = None;
-                            self.pending_cmds.lock().await.insert(msg_ident, cmd);
+                            self.pending_cmds_manager.add_pending_cmd(cmd).await;
                         }
                     },
                     None => {
-                        self.pending_cmds.lock().await.insert(msg.cmd.header.msg_ident, msg.cmd.as_ref().clone());
+                        self.pending_cmds_manager.add_pending_cmd(cmd).await;
                     },
                 }
             }

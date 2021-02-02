@@ -29,7 +29,7 @@ pub async fn run_register_process(config: Configuration) {
     let tcp_listener = TcpListener::bind((host.as_str(), *port)).await.unwrap();
 
     let (sender, receiver) = unbounded_channel();
-    let (commands_executor, pending_cmds) =
+    let (commands_executor, pending_cmds, pending_cmds_manager) =
         get_commands_executor_and_pending_cmd(&config, sender, REGISTERS_NUMBER).await;
 
     handle_internal_commands(commands_executor.clone(), receiver);
@@ -56,7 +56,8 @@ pub async fn run_register_process(config: Configuration) {
         let (read_stream, write) = stream.into_split();
         let write_stream = Arc::new(Mutex::new(write));
 
-        handle_external_command(commands_executor.clone(), read_stream, write_stream,
+        handle_external_command(commands_executor.clone(), pending_cmds_manager.clone(),
+            read_stream, write_stream,
             config.hmac_system_key.clone(), config.hmac_client_key.clone(),
             config.public.max_sector);
     }
@@ -185,7 +186,7 @@ pub mod transfer_public {
 pub mod register_client_public {
     use crate::{SystemRegisterCommand};
     use std::sync::Arc;
-    use crate::register_client::register_client::RegisterClientImplementation;
+    use crate::register_client::register_client::{PendingCommandsManager, RegisterClientImplementation};
     use tokio::sync::mpsc::UnboundedSender;
 
     #[async_trait::async_trait]
@@ -211,8 +212,8 @@ pub mod register_client_public {
     }
 
     pub fn build_register_client(self_ident: u8, hmac_system_key: [u8; 64], tcp_locations: Vec<(String, u16)>,
-                                 self_sender: UnboundedSender<SystemRegisterCommand>) -> Arc<dyn RegisterClient> {
-        RegisterClientImplementation::new(self_ident, hmac_system_key, tcp_locations, self_sender)
+                                 self_sender: UnboundedSender<SystemRegisterCommand>, pending_cmds_manager: Arc<PendingCommandsManager>) -> Arc<dyn RegisterClient> {
+        RegisterClientImplementation::new(self_ident, hmac_system_key, tcp_locations, self_sender, pending_cmds_manager)
     }
 }
 
