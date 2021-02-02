@@ -14,14 +14,14 @@ pub use register_client_public::*;
 pub use sectors_manager_public::*;
 pub use stable_storage_public::*;
 pub use transfer_public::*;
-use std::convert::TryInto;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener};
 use tokio::sync::mpsc::unbounded_channel;
 use crate::run_register_process::run_register_process::{get_commands_executor_and_pending_cmd, handle_external_command, handle_internal_commands};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-const REGISTERS_NUMBER: usize = 1;
+// TODO - change
+const REGISTERS_NUMBER: usize = 10;
 
 pub async fn run_register_process(config: Configuration) {
     let self_ident = config.public.self_rank;
@@ -29,14 +29,14 @@ pub async fn run_register_process(config: Configuration) {
     let tcp_listener = TcpListener::bind((host.as_str(), *port)).await.unwrap();
 
     let (sender, receiver) = unbounded_channel();
-    // TODO - start pending commands
+    // TODO - decide what to do with pending commands
     let (commands_executor, pending_cmds) =
         get_commands_executor_and_pending_cmd(&config, sender, REGISTERS_NUMBER).await;
 
     handle_internal_commands(commands_executor.clone(), receiver);
 
     loop {
-        let (stream, s) = tcp_listener.accept().await.unwrap();
+        let (stream, _) = tcp_listener.accept().await.unwrap();
         let (read_stream, write) = stream.into_split();
         let write_stream = Arc::new(Mutex::new(write));
 

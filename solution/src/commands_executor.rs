@@ -1,11 +1,10 @@
 pub mod commands_executor {
     use std::sync::{Arc};
-    use crate::{AtomicRegister, ClientRegisterCommand, SectorIdx, OperationComplete, SystemRegisterCommand, SystemRegisterCommandContent, RegisterCommand};
+    use crate::{AtomicRegister, ClientRegisterCommand, SectorIdx, OperationComplete, SystemRegisterCommand, SystemRegisterCommandContent};
     use std::collections::{HashMap};
     use uuid::Uuid;
-    use tokio::sync::{Mutex, MutexGuard, Notify};
+    use tokio::sync::{Mutex, Notify};
     use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
-    use std::mem::{size_of, size_of_val};
 
     pub struct CommandsExecutor {
         sector_notifiers: Vec<Arc<Notify>>,
@@ -76,7 +75,7 @@ pub mod commands_executor {
                 }
             }
             let mut sector_counters = self.sector_counters.lock().await;
-            let (counter, total_finished) = sector_counters.get_mut(&sector_idx).unwrap();
+            let (counter, _) = sector_counters.get_mut(&sector_idx).unwrap();
             let my_counter = *counter;
             *counter = *counter + 1;
             drop(sector_counters);
@@ -142,7 +141,7 @@ pub mod commands_executor {
             let uuid = &Uuid::from_u128(req_id as u128);
             if let Some((_, sector_idx)) = self.msg_id_handler_sector_idx.lock().await.remove(&uuid) {
                 let mut sector_counters = self.sector_counters.lock().await;
-                let (counter, total_finished) = sector_counters.get_mut(&sector_idx).unwrap();
+                let (_, total_finished) = sector_counters.get_mut(&sector_idx).unwrap();
                 *total_finished = *total_finished + 1;
                 let notify = self.sector_notifiers[sector_idx as usize].clone();
                 notify.notify_waiters();
