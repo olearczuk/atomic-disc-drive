@@ -21,21 +21,6 @@ fn serialize_deserialize_unknown_msg_type() {
 
 #[test]
 #[timeout(200)]
-fn deserialize_client_read_error() {
-    // given
-    let sink: Vec<u8> = vec![1; 500];
-    let mut slice: &[u8] = &sink[..];
-    let data_read: &mut dyn std::io::Read = &mut slice;
-
-    // when
-    let res = deserialize_register_command(data_read);
-
-    // then
-    res.err().expect("Should be error");
-}
-
-#[test]
-#[timeout(200)]
 fn serialize_deserialize_is_identity_client_read() {
     // given
     let request_identifier = 7;
@@ -47,8 +32,7 @@ fn serialize_deserialize_is_identity_client_read() {
         },
         content: ClientRegisterCommandContent::Read,
     });
-    // MAGIC_NUMBER prefix
-    let mut sink: Vec<u8> = vec![0x61, 0x74, 0x69];
+    let mut sink: Vec<u8> = vec![];
 
     // when
     serialize_register_command(&register_cmd, &mut sink).expect("Could not serialize?");
@@ -85,8 +69,7 @@ fn serialize_deserialize_is_identity_client_write() {
             data: content_data.clone(),
         },
     });
-    // MAGIC_NUMBER prefix
-    let mut sink: Vec<u8> = vec![0x61, 0x74, 0x64];
+    let mut sink: Vec<u8> = vec![];
 
     // when
     serialize_register_command(&register_cmd, &mut sink).expect("Could not serialize?");
@@ -126,8 +109,7 @@ fn serialize_deserialize_is_identity_system_read_proc() {
         },
         content: SystemRegisterCommandContent::ReadProc
     });
-    // MAGIC_NUMBER prefix
-    let mut sink: Vec<u8> = vec![0x61, 0x74, 0x64];
+    let mut sink = vec![];
 
     // when
     serialize_register_command(&register_cmd, &mut sink).expect("Could not serialize?");
@@ -176,8 +158,7 @@ fn serialize_deserialize_is_identity_system_value() {
             sector_data: sector_data_.clone(),
         },
     });
-    // MAGIC_NUMBER prefix
-    let mut sink: Vec<u8> = vec![0x61, 0x74, 0x64];
+    let mut sink = vec![];
 
     // when
     serialize_register_command(&register_cmd, &mut sink).expect("Could not serialize?");
@@ -232,8 +213,7 @@ fn serialize_deserialize_is_identity_system_write_proc() {
             data_to_write: data_to_write_.clone(),
         },
     });
-    // MAGIC_NUMBER prefix
-    let mut sink: Vec<u8> = vec![0x61, 0x74, 0x64];
+    let mut sink = vec![];
 
     // when
     serialize_register_command(&register_cmd, &mut sink).expect("Could not serialize?");
