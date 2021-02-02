@@ -21,8 +21,7 @@ use crate::run_register_process::run_register_process::{get_commands_executor_an
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// TODO - change
-const REGISTERS_NUMBER: usize = 10;
+const REGISTERS_NUMBER: usize = 256;
 
 pub async fn run_register_process(config: Configuration) {
     let self_ident = config.public.self_rank;
@@ -48,7 +47,12 @@ pub async fn run_register_process(config: Configuration) {
     }
 
     loop {
-        let (stream, _) = tcp_listener.accept().await.unwrap();
+        let accept_res = tcp_listener.accept().await;
+        if accept_res.is_err() {
+            log::error!("Error while accepting new connection {}", accept_res.unwrap_err());
+            continue;
+        }
+        let (stream, _) = accept_res.unwrap();
         let (read_stream, write) = stream.into_split();
         let write_stream = Arc::new(Mutex::new(write));
 

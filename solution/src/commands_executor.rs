@@ -19,14 +19,18 @@ pub mod commands_executor {
     async fn single_register_thread(index: usize, registers: Arc<Vec<Mutex<Box<dyn AtomicRegister>>>>,
                                     ready_sender: UnboundedSender<usize>, mut cmd_receiver: UnboundedReceiver<WorkerMessage>) {
         loop {
-            ready_sender.send(index).unwrap();
-            let msg = cmd_receiver.recv().await.unwrap();
-            let mut register = registers[index].lock().await;
-            match msg {
-                WorkerMessage::Client(cmd, callback) =>
-                    register.client_command(cmd.clone(), callback).await,
-                WorkerMessage::System(cmd) => register.system_command(cmd.clone()).await,
-            };
+            ready_sender.send(index).unwrap_or_else(|err|
+                log::error!("[register index: {}] Error while sending ready: {}", index, err)
+            );
+            let msg = cmd_receiver.recv().await;
+            if msg.is_some() {
+                let mut register = registers[index].lock().await;
+                match msg.unwrap() {
+                    WorkerMessage::Client(cmd, callback) =>
+                        register.client_command(cmd.clone(), callback).await,
+                    WorkerMessage::System(cmd) => register.system_command(cmd.clone()).await,
+                };
+            }
         }
     }
 
@@ -91,7 +95,7 @@ pub mod commands_executor {
             *counter = *counter + 1;
             drop(sector_counters);
 
-            // stay in the loop until you are "owner" of the slot
+            // stay in the loop until you are "owner" of this sector
             loop {
                 let sector_counters = self.sector_counters.lock().await;
                 let (_, total_finished) = sector_counters.get(&sector_idx).unwrap();
@@ -105,18 +109,24 @@ pub mod commands_executor {
 
             // get index of ready regsiter
             let mut ready_register_receiver = self.ready_register_receiver.lock().await;
-            let register_index = ready_register_receiver.recv().await.unwrap();
+            let register_index = ready_register_receiver.recv().await;
+            if register_index.is_none() {
+                return;
+            }
+            let register_index = register_index.unwrap();
             drop(ready_register_receiver);
 
             // update msg_id_handler_sector_idx info
-            let req_id = Uuid::from_u128(cmd.header.request_identifier as u128);
+            let msg_id = Uuid::from_u128(cmd.header.request_identifier as u128);
             let mut msg_id_handler_sector_idx = self.msg_id_handler_sector_idx.lock().await;
-            msg_id_handler_sector_idx.insert(req_id, (register_index, sector_idx));
+            msg_id_handler_sector_idx.insert(msg_id, (register_index, sector_idx));
             drop(msg_id_handler_sector_idx);
 
             // give register command to execute
             let cmd_sender = self.cmd_senders[register_index].lock().await;
-            cmd_sender.send(WorkerMessage::Client(cmd, operation_complete)).unwrap_or_default();
+            cmd_sender.send(WorkerMessage::Client(cmd, operation_complete)).unwrap_or_else(|err|
+                log::error!("[register index: {}] Error sending Client command: {}", register_index, err)
+            );
         }
 
         pub async fn execute_system_command(&self, cmd: SystemRegisterCommand) {
@@ -124,12 +134,17 @@ pub mod commands_executor {
                 SystemRegisterCommandContent::ReadProc | SystemRegisterCommandContent::WriteProc {..} => {
                     // get index of ready register
                     let mut ready_register_receiver = self.ready_register_receiver.lock().await;
-                    let register_index = ready_register_receiver.recv().await.unwrap();
-                    drop(ready_register_receiver);
+                    let register_index = ready_register_receiver.recv().await;
+                    if register_index.is_some() {
+                        let register_index = register_index.unwrap();
+                        drop(ready_register_receiver);
 
-                    // give register command to execute
-                    let cmd_sender = self.cmd_senders[register_index].lock().await;
-                    cmd_sender.send(WorkerMessage::System(cmd)).unwrap_or_default();
+                        // give register command to execute
+                        let cmd_sender = self.cmd_senders[register_index].lock().await;
+                        cmd_sender.send(WorkerMessage::System(cmd)).unwrap_or_else(|err|
+                            log::error!("[register index: {}] Error sending ReadProc/WriteProc command: {}", register_index, err)
+                        );
+                    }
                 }
                 SystemRegisterCommandContent::Ack | SystemRegisterCommandContent::Value {..} => {
                     // retrieve register responsible for handling this request
@@ -141,7 +156,9 @@ pub mod commands_executor {
                     // here we don't wait for register to be ready, because we already know register we want
                     if let Some((register_index, _)) = index {
                         let cmd_sender = self.cmd_senders[register_index].lock().await;
-                        cmd_sender.send(WorkerMessage::System(cmd)).unwrap_or_default();
+                        cmd_sender.send(WorkerMessage::System(cmd)).unwrap_or_else(|err|
+                            log::error!("ACK/Value [register index: {}] Error sending Ack/Value command: {}", register_index, err)
+                        );
                     }
                 }
             };

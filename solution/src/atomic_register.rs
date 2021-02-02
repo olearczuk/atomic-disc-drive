@@ -57,13 +57,14 @@ pub mod atomic_register {
             processes_count: usize,
         ) -> (Box<dyn AtomicRegister>, Option<ClientRegisterCommand>) {
             let state_val = stable_storage.get(ATOMIC_REGISTER_STATE_KEY).await;
+            let empty_state = AtomicRegisterStorageState {
+                read_ident: 0,
+                writing: false,
+                writeval: None,
+            };
             let state = match state_val {
-                None => AtomicRegisterStorageState {
-                    read_ident: 0,
-                    writing: false,
-                    writeval: None,
-                },
-                Some(vec) => bincode::deserialize(&vec[..]).unwrap(),
+                None => empty_state,
+                Some(vec) => bincode::deserialize(&vec[..]).unwrap_or(empty_state),
             };
 
             let mut register = Box::new(AtomicRegisterImplementation {
@@ -96,10 +97,10 @@ pub mod atomic_register {
         }
 
         async fn store_state(&mut self) {
-            let encoded = bincode::serialize(&self.state).unwrap();
-            self.stable_storage
-                .put(ATOMIC_REGISTER_STATE_KEY, encoded.as_slice())
-                .await.unwrap();
+            let encoded = bincode::serialize(&self.state).unwrap_or(vec![]);
+            self.stable_storage.put(ATOMIC_REGISTER_STATE_KEY, encoded.as_slice()).await.unwrap_or_else(|err| {
+                log::error!("Error while storing state: {}", err);
+            })
         }
     }
 
@@ -231,9 +232,7 @@ pub mod atomic_register {
                 } => {
                     let (ts, wr) = self.sectors_manager.read_metadata(sector_idx).await;
                     if (timestamp, write_rank) > (ts, wr) {
-                        self.sectors_manager
-                            .write(sector_idx, &(data_to_write, timestamp, write_rank))
-                            .await;
+                        self.sectors_manager.write(sector_idx, &(data_to_write, timestamp, write_rank)).await;
                     }
 
                     let header = SystemCommandHeader::new(

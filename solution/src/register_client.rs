@@ -73,6 +73,7 @@ pub mod register_client {
                                                 target: target,
                                             };
                                             if let Err(err) = self.send_stream(&mut tcp_stream, new_msg).await {
+                                                log::error!("[target: {}], Error while sending pending command {}", target, err);
                                                 error_counter += 1;
                                             }
                                         }
@@ -81,10 +82,10 @@ pub mod register_client {
                                             *stream = Some(tcp_stream);
                                         }
                                     },
-                                    Err(err) => println!("{:?}", err),
+                                    Err(err) => log::error!("[target: {}], Error while trying to connect {}", target, err),
                                 }
                             },
-                            Err(err) => println!("{:?}", err),
+                            Err(err) => log::error!("[target: {}], Error while trying to connect {}", target, err),
                         }
                     }
                 }
@@ -95,7 +96,7 @@ pub mod register_client {
         async fn send_stream(&self, stream: &mut TcpStream, msg: crate::Send) -> Result<()> {
             let mut data = Vec::new();
             let cmd = RegisterCommand::System(msg.cmd.as_ref().clone());
-            serialize_register_command(&cmd, &mut data).unwrap();
+            serialize_register_command(&cmd, &mut data)?;
 
             let mut mac = HmacSha256::new_varkey(&self.hmac_system_key).unwrap();
             mac.update(&data);
@@ -107,19 +108,22 @@ pub mod register_client {
     #[async_trait::async_trait]
     impl RegisterClient for RegisterClientImplementation {
         async fn send(&self, msg: crate::Send) {
-            if msg.target == self.self_ident as usize {
+            let target = msg.target;
+            if target == self.self_ident as usize {
                 self.self_sender.send(SystemRegisterCommand {
                     header: msg.cmd.header.clone(),
                     content: msg.cmd.content.clone(),
-                }).unwrap();
+                }).unwrap_or_else(|err|
+                    log::error!("Error while sending to itself {}",  err));
             } else {
-                let mut stream = self.tcp_streams[msg.target - 1].lock().await;
+                let mut stream = self.tcp_streams[target - 1].lock().await;
                 match stream.as_mut() {
                     Some(tcp_stream) => {
                         let cmd = msg.cmd.as_ref().clone();
                         let msg_ident = msg.cmd.header.msg_ident;
                         // problem with connection - let monitor_connections take care of that
                         if let Err(err) = self.send_stream(tcp_stream, msg).await {
+                            log::error!("[target: {}], Error while sending {}", target, err);
                             *stream = None;
                             self.pending_cmds.lock().await.insert(msg_ident, cmd);
                         }
