@@ -29,11 +29,21 @@ pub async fn run_register_process(config: Configuration) {
     let tcp_listener = TcpListener::bind((host.as_str(), *port)).await.unwrap();
 
     let (sender, receiver) = unbounded_channel();
-    // TODO - decide what to do with pending commands
     let (commands_executor, pending_cmds) =
         get_commands_executor_and_pending_cmd(&config, sender, REGISTERS_NUMBER).await;
 
     handle_internal_commands(commands_executor.clone(), receiver);
+
+    for cmd in pending_cmds {
+        let commands_executor_cloned = commands_executor.clone();
+        let callback: Box<dyn FnOnce(OperationComplete) + std::marker::Send + Sync> =
+            Box::new(move |op_complete| {
+                tokio::spawn(async move {
+                    commands_executor_cloned.finish_client_command(op_complete.request_identifier).await;
+                });
+            });
+        commands_executor.execute_client_command(cmd, callback).await;
+    }
 
     loop {
         let (stream, _) = tcp_listener.accept().await.unwrap();
@@ -201,7 +211,7 @@ pub mod register_client_public {
 
     pub fn build_register_client(self_ident: u8, hmac_system_key: [u8; 64], tcp_locations: Vec<(String, u16)>,
                                  self_sender: UnboundedSender<SystemRegisterCommand>) -> Arc<dyn RegisterClient> {
-        Arc::new(RegisterClientImplementation::new(self_ident, hmac_system_key, tcp_locations, self_sender))
+        RegisterClientImplementation::new(self_ident, hmac_system_key, tcp_locations, self_sender)
     }
 }
 

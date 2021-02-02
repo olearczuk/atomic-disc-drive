@@ -38,7 +38,6 @@ async fn simple_system() {
 
     println!("before spawn");
     let handle = tokio::spawn(run_register_process(config));
-    println!("after spawn");
     tokio::join!(handle);
 }
 

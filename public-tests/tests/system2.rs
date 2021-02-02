@@ -46,13 +46,13 @@ async fn one_reads_other_writes() {
     };
 
     tokio::spawn(run_register_process(config));
-    // tokio::spawn(run_register_process(config2));
+    tokio::spawn(run_register_process(config2));
     tokio::time::sleep(Duration::from_millis(300)).await;
     let mut stream = TcpStream::connect(("127.0.0.1", tcp_port))
         .await
         .expect("Could not connect to TCP port");
-    // let mut stream2 = TcpStream::connect(("127.0.0.1", tcp_port2))
-    //     .await.expect("couldnt connect to tcp port");
+    let mut stream2 = TcpStream::connect(("127.0.0.1", tcp_port2))
+        .await.expect("couldnt connect to tcp port");
     let write_cmd = RegisterCommand::Client(ClientRegisterCommand {
         header: ClientCommandHeader {
             request_identifier,
@@ -65,14 +65,6 @@ async fn one_reads_other_writes() {
 
     // when
     send_cmd(&write_cmd, &mut stream, &hmac_client_key.clone()).await;
-
-    // tokio::time::sleep(Duration::from_secs(2)).await;
-
-    tokio::spawn(run_register_process(config2));
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let mut stream2 = TcpStream::connect(("127.0.0.1", tcp_port2))
-        .await.expect("couldnt connect to tcp port");
-
     let read_cmd = RegisterCommand::Client(ClientRegisterCommand{ header: ClientCommandHeader{
         request_identifier: request_identifier+1, sector_idx: 12 }, content: ClientRegisterCommandContent::Read });
     // then
@@ -208,6 +200,194 @@ async fn multiple_reads_and_writes(){
 
 }
 
+#[tokio::test]
+#[timeout(20000)]
+async fn recovery() {
+    // given
+    let hmac_client_key = [5; 32];
+    let tcp_port = 32_999;
+    let tcp_port_ = 32_282;
+    let tcp_port2 = 32_283;
+    let path = tempdir().unwrap().into_path();
+    let path2 = tempdir().unwrap().into_path();
+    let request_identifier = 1778;
+
+    let config = Configuration {
+        public: PublicConfiguration {
+            tcp_locations: vec![("127.0.0.1".to_string(), tcp_port), ("127.0.0.1".to_string(), tcp_port2)],
+            self_rank: 1,
+            max_sector: 20,
+            storage_dir: path.clone(),
+        },
+        hmac_system_key: [1; 64],
+        hmac_client_key,
+    };
+    let config_ = Configuration {
+        public: PublicConfiguration {
+            tcp_locations: vec![("127.0.0.1".to_string(), tcp_port_), ("127.0.0.1".to_string(), tcp_port2)],
+            self_rank: 1,
+            max_sector: 20,
+            storage_dir: path,
+        },
+        hmac_system_key: [1; 64],
+        hmac_client_key,
+    };
+    let config2 = Configuration{
+        public: PublicConfiguration {
+            tcp_locations: vec![("127.0.0.1".to_string(), tcp_port_), ("127.0.0.1".to_string(), tcp_port2)],
+            self_rank: 2,
+            max_sector: 20,
+            storage_dir: path2,
+        },
+        hmac_system_key: [1; 64],
+        hmac_client_key,
+    };
+
+    let handle = tokio::spawn(run_register_process(config));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", tcp_port))
+        .await
+        .expect("Could not connect to TCP port");
+    let write_cmd = RegisterCommand::Client(ClientRegisterCommand {
+        header: ClientCommandHeader {
+            request_identifier,
+            sector_idx: 12,
+        },
+        content: ClientRegisterCommandContent::Write {
+            data: SectorVec(vec![3; 4096]),
+        },
+    });
+
+    // when
+    send_cmd(&write_cmd, &mut stream, &hmac_client_key.clone()).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // the other process did not get started, so there was write in progress
+    handle.abort();
+
+    tokio::spawn(run_register_process(config2));
+    tokio::spawn(run_register_process(config_));
+
+    tokio::time::sleep(Duration::from_millis(6000)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", tcp_port_))
+        .await.expect("couldnt connect to tcp port");
+
+    let read_cmd = RegisterCommand::Client(ClientRegisterCommand{ header: ClientCommandHeader{
+        request_identifier: request_identifier+1, sector_idx: 12 }, content: ClientRegisterCommandContent::Read });
+    // then
+    send_cmd(&read_cmd, &mut stream, &hmac_client_key.clone()).await;
+
+
+    const EXPECTED_RESPONSES_SIZE: usize = 48;
+    let mut buf: Vec<u8> = vec![0; 4096+EXPECTED_RESPONSES_SIZE];
+    stream.read_exact( buf.as_mut_slice())
+        .await
+        .expect("less data than expected");
+    //asserts for write response
+    assert_eq!(&buf[0..4], MAGIC_NUMBER.as_ref());
+    assert_eq!(buf[7], 0x41);
+    assert_eq!(
+        u64::from_be_bytes(buf[8..16].try_into().unwrap()),
+        (request_identifier+1)
+    );
+    assert_eq!(&buf[16..4112], vec![3_u8; 4096].as_slice());
+    assert!(hmac_tag_is_ok(&hmac_client_key, &buf));
+}
+
+#[tokio::test]
+#[timeout(20000)]
+async fn retry_connecting() {
+    // given
+    let hmac_client_key = [5; 32];
+    let tcp_port = 33_998;
+    let tcp_port_ = 33_282;
+    let tcp_port2 = 33_283;
+    let path = tempdir().unwrap().into_path();
+    let path2 = tempdir().unwrap().into_path();
+    let request_identifier = 1778;
+
+    let config = Configuration {
+        public: PublicConfiguration {
+            tcp_locations: vec![("127.0.0.1".to_string(), tcp_port), ("127.0.0.1".to_string(), tcp_port2)],
+            self_rank: 1,
+            max_sector: 20,
+            storage_dir: path.clone(),
+        },
+        hmac_system_key: [1; 64],
+        hmac_client_key,
+    };
+    let config_ = Configuration {
+        public: PublicConfiguration {
+            tcp_locations: vec![("127.0.0.1".to_string(), tcp_port_), ("127.0.0.1".to_string(), tcp_port2)],
+            self_rank: 1,
+            max_sector: 20,
+            storage_dir: path,
+        },
+        hmac_system_key: [1; 64],
+        hmac_client_key,
+    };
+    let config2 = Configuration{
+        public: PublicConfiguration {
+            tcp_locations: vec![("127.0.0.1".to_string(), tcp_port_), ("127.0.0.1".to_string(), tcp_port2)],
+            self_rank: 2,
+            max_sector: 20,
+            storage_dir: path2,
+        },
+        hmac_system_key: [1; 64],
+        hmac_client_key,
+    };
+
+    let handle = tokio::spawn(run_register_process(config));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", tcp_port))
+        .await
+        .expect("Could not connect to TCP port");
+    let write_cmd = RegisterCommand::Client(ClientRegisterCommand {
+        header: ClientCommandHeader {
+            request_identifier,
+            sector_idx: 12,
+        },
+        content: ClientRegisterCommandContent::Write {
+            data: SectorVec(vec![3; 4096]),
+        },
+    });
+
+    // when
+    send_cmd(&write_cmd, &mut stream, &hmac_client_key.clone()).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // the other process did not get started, so there was write in progress
+    handle.abort();
+
+    tokio::spawn(run_register_process(config_));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::spawn(run_register_process(config2));
+
+    tokio::time::sleep(Duration::from_millis(6000)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", tcp_port_))
+        .await.expect("couldnt connect to tcp port");
+
+    let read_cmd = RegisterCommand::Client(ClientRegisterCommand{ header: ClientCommandHeader{
+        request_identifier: request_identifier+1, sector_idx: 12 }, content: ClientRegisterCommandContent::Read });
+    // then
+    send_cmd(&read_cmd, &mut stream, &hmac_client_key.clone()).await;
+
+
+    const EXPECTED_RESPONSES_SIZE: usize = 48;
+    let mut buf: Vec<u8> = vec![0; 4096+EXPECTED_RESPONSES_SIZE];
+    stream.read_exact( buf.as_mut_slice())
+        .await
+        .expect("less data than expected");
+    //asserts for write response
+    assert_eq!(&buf[0..4], MAGIC_NUMBER.as_ref());
+    assert_eq!(buf[7], 0x41);
+    assert_eq!(
+        u64::from_be_bytes(buf[8..16].try_into().unwrap()),
+        (request_identifier+1)
+    );
+    assert_eq!(&buf[16..4112], vec![3_u8; 4096].as_slice());
+    assert!(hmac_tag_is_ok(&hmac_client_key, &buf));
+}
 
 type HmacSha256 = Hmac<Sha256>;
 
