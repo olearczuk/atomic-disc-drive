@@ -16,7 +16,8 @@ pub use stable_storage_public::*;
 pub use transfer_public::*;
 use tokio::net::{TcpListener};
 use tokio::sync::mpsc::unbounded_channel;
-use crate::run_register_process::run_register_process::{get_commands_executor_and_pending_cmd, handle_external_command, handle_internal_commands};
+use crate::run_register_process::run_register_process::{get_commands_executor_and_pending_cmd, handle_external_command,
+    handle_internal_commands};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -34,6 +35,7 @@ pub async fn run_register_process(config: Configuration) {
 
     handle_internal_commands(commands_executor.clone(), receiver);
 
+    // start with executing pending messages
     for cmd in pending_cmds {
         let commands_executor_cloned = commands_executor.clone();
         let callback: Box<dyn FnOnce(OperationComplete) + std::marker::Send + Sync> =
@@ -132,35 +134,30 @@ pub mod sectors_manager_public {
 /// there be a problem.
 pub mod transfer_public {
     use crate::serialize_deserialize::serialize_deserialize::{deserialize_client_command, serialize_client_command,
-        serialize_system_command, deserialize_system_command};
+        serialize_system_command, deserialize_system_command, READ, WRITE};
     use crate::{RegisterCommand, MAGIC_NUMBER, OperationComplete, OperationReturn, ReadReturn};
-    use std::io::{Error, Read, Write};
+    use std::io::{Result, Read, Write};
     use crate::RegisterCommand::{Client, System};
 
-    pub fn deserialize_register_command(data: &mut dyn Read) -> Result<RegisterCommand, Error> {
+    pub fn deserialize_register_command(data: &mut dyn Read) -> Result<RegisterCommand> {
         // getting rid of padding and magic nuber
         let mut buffer: [u8; 8] = [0; 8];
-        if let Err(err) = data.read_exact(&mut buffer) {
-            return Err(err);
-        }
+        data.read_exact(&mut buffer)?;
         let process_identifier = buffer[6];
         let msg_type = buffer[7];
 
-        let res = deserialize_client_command(data, msg_type);
-        if res.is_none() {
-            deserialize_system_command(data, process_identifier, msg_type)
+        if msg_type == READ || msg_type == WRITE {
+            deserialize_client_command(data, msg_type)
         } else {
-            res.unwrap()
+            deserialize_system_command(data, process_identifier, msg_type)
         }
     }
 
     pub fn serialize_register_command(
         cmd: &RegisterCommand,
         writer: &mut dyn Write,
-    ) -> Result<(), Error> {
-        if let Err(err) = writer.write_all(&MAGIC_NUMBER) {
-            return Err(err);
-        }
+    ) -> Result<()> {
+        writer.write_all(&MAGIC_NUMBER)?;
         match cmd {
             Client(client_cmd) => serialize_client_command(client_cmd, writer),
             System(system_cmd) => serialize_system_command(system_cmd, writer),

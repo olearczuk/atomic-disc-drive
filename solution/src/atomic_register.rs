@@ -30,7 +30,6 @@ pub mod atomic_register {
     struct AtomicRegisterStorageState {
         read_ident: u64,
         writing: bool,
-        // TODO: is option necessary?
         writeval: Option<DataWithHeader>,
     }
 
@@ -44,7 +43,6 @@ pub mod atomic_register {
         readlist: HashMap<u8, (u64, u8, SectorVec)>,
         acks: HashSet<u8>,
         reading: bool,
-        // TODO: is option necessary?
         readval: Option<DataWithRequestIdentifier>,
         state: AtomicRegisterStorageState,
         callback: Option<Box<dyn FnOnce(OperationComplete) + Send + Sync>>,
@@ -183,9 +181,7 @@ pub mod atomic_register {
                         cmd.header.process_identifier,
                         (timestamp, write_rank, sector_data),
                     );
-                    if (self.reading || self.state.writing)
-                        && 2 * self.readlist.len() > self.processes_count
-                    {
+                    if (self.reading || self.state.writing) && 2 * self.readlist.len() > self.processes_count {
                         let readlist_cloned = self.readlist.clone();
                         let (_, (maxts, maxrank, maxdata)) = readlist_cloned
                             .iter()
@@ -261,30 +257,18 @@ pub mod atomic_register {
                     }
 
                     self.acks.insert(cmd.header.process_identifier);
-                    if (self.reading || self.state.writing)
-                        && 2 * self.acks.len() > self.processes_count
-                    {
+                    if (self.reading || self.state.writing) && 2 * self.acks.len() > self.processes_count {
                         self.acks.clear();
                         let (request_identifier, op_return) = if self.reading {
                             self.reading = false;
                             (
                                 self.readval.clone().unwrap().request_identifier,
-                                OperationReturn::Read(ReadReturn {
-                                    read_data: Some(self.readval.clone().unwrap().data),
-                                }),
+                                OperationReturn::Read(ReadReturn { read_data: Some(self.readval.clone().unwrap().data) })
                             )
                         } else {
                             self.state.writing = false;
                             self.store_state().await;
-                            (
-                                self.state
-                                    .writeval
-                                    .clone()
-                                    .unwrap()
-                                    .header
-                                    .request_identifier,
-                                OperationReturn::Write,
-                            )
+                            (self.state.writeval.clone().unwrap().header.request_identifier, OperationReturn::Write)
                         };
                         let op = OperationComplete {
                             status_code: StatusCode::Ok,
@@ -293,8 +277,8 @@ pub mod atomic_register {
                         };
                         if self.callback.is_some() {
                             (self.callback.take().unwrap())(op);
+                            self.callback = None;
                         }
-                        self.callback = None;
                     }
                 }
             }

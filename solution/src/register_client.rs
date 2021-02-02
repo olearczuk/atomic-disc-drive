@@ -17,9 +17,12 @@ pub mod register_client {
     pub struct RegisterClientImplementation {
         self_ident: u8,
         hmac_system_key: [u8; 64],
+        /// vector of TCP streams - None means that connection broke
         tcp_streams: Vec<Mutex<Option<TcpStream>>>,
         tcp_addresses: Vec<(String, u16)>,
+        /// channel used for sending messages to itself
         self_sender: UnboundedSender<SystemRegisterCommand>,
+        /// the most actual command per msg_ident (replaying them might save atomic registers from hanging)
         pending_cmds: Mutex<HashMap<Uuid, SystemRegisterCommand>>
     }
 
@@ -43,7 +46,10 @@ pub mod register_client {
             register_client
         }
 
-        async fn monitor_connections(&self) {
+        /// monitor_connections is responsible for continuously checking if client is properly connect to other processes.
+        /// If stream = None, then it means that connection broke and it has to be reestablished.
+        /// Additionally, pending messages are replayed to process when connection reestablished.
+         async fn monitor_connections(&self) {
             loop {
                 for target in 0..self.tcp_streams.len() {
                     if target as u8 == self.self_ident - 1 {
@@ -70,6 +76,7 @@ pub mod register_client {
                                                 error_counter += 1;
                                             }
                                         }
+                                        // mark connection as active if no errors occurred
                                         if error_counter == 0 {
                                             *stream = Some(tcp_stream);
                                         }
@@ -95,10 +102,6 @@ pub mod register_client {
             data.extend(mac.finalize().into_bytes());
             stream.write_all(data.as_slice()).await
         }
-
-        async fn add_pending_cmd(&self, request_identifier: Uuid, cmd: SystemRegisterCommand) {
-            self.pending_cmds.lock().await.insert(request_identifier, cmd);
-        }
     }
 
     #[async_trait::async_trait]
@@ -113,13 +116,17 @@ pub mod register_client {
                 let mut stream = self.tcp_streams[msg.target - 1].lock().await;
                 match stream.as_mut() {
                     Some(tcp_stream) => {
+                        let cmd = msg.cmd.as_ref().clone();
+                        let msg_ident = msg.cmd.header.msg_ident;
+                        // problem with connection - let monitor_connections take care of that
                         if let Err(err) = self.send_stream(tcp_stream, msg).await {
-                            // problem with connection - let monitor_connections take care of that
                             *stream = None;
+                            self.pending_cmds.lock().await.insert(msg_ident, cmd);
                         }
                     },
-                    None =>
-                        self.add_pending_cmd(msg.cmd.header.msg_ident, msg.cmd.as_ref().clone()).await,
+                    None => {
+                        self.pending_cmds.lock().await.insert(msg.cmd.header.msg_ident, msg.cmd.as_ref().clone());
+                    },
                 }
             }
         }

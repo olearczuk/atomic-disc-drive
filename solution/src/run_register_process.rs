@@ -1,5 +1,7 @@
 pub mod run_register_process {
-    use crate::{Configuration, build_register_client, build_sectors_manager, build_atomic_register, build_stable_storage, ClientRegisterCommand, SystemRegisterCommand, deserialize_register_command, RegisterCommand, OperationComplete, MAGIC_NUMBER, serialize_response, StatusCode, OperationReturn, SECTOR_VEC_SIZE};
+    use crate::{Configuration, build_register_client, build_sectors_manager, build_atomic_register, build_stable_storage,
+        ClientRegisterCommand, SystemRegisterCommand, deserialize_register_command, RegisterCommand, OperationComplete,
+        MAGIC_NUMBER, serialize_response, StatusCode, OperationReturn, SECTOR_VEC_SIZE};
     use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver};
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -30,7 +32,7 @@ pub mod run_register_process {
                         // TODO - error
                         get_magic_number(&mut read_stream).await.unwrap();
 
-                        read_stream.peek(&mut buffer).await.unwrap();
+                        read_stream.read(&mut buffer).await.unwrap();
                         let msg_type = buffer[3];
                         let msg_len = match msg_type {
                             READ => 24,
@@ -47,10 +49,11 @@ pub mod run_register_process {
 
                         let hmac_key: &[u8] = if msg_type < READ_PROC { &hmac_client_key } else { &hmac_system_key };
 
-                        // +HMAC tag, - already read MAGIC_NUMBER
-                        let mut msg = vec![0; msg_len + 32 - 4];
+                        // +HMAC tag, - already read MAGIC_NUMBER and following 4 bytes
+                        let mut msg = vec![0; msg_len + 32 - 8];
                         read_stream.read_exact(&mut msg).await.unwrap();
                         let mut data = MAGIC_NUMBER.to_vec();
+                        data.append(&mut buffer.to_vec());
                         data.append(&mut msg);
 
                         let mut mac = HmacSha256::new_varkey(hmac_key).unwrap();

@@ -1,6 +1,7 @@
 pub mod serialize_deserialize {
-    use std::io::{Error, Read, ErrorKind, Write};
-    use crate::{ClientCommandHeader, ClientRegisterCommand, SectorVec, ClientRegisterCommandContent, RegisterCommand, SystemRegisterCommand, SystemRegisterCommandContent, SystemCommandHeader, SECTOR_VEC_SIZE};
+    use std::io::{Result, Error, Read, ErrorKind, Write};
+    use crate::{ClientCommandHeader, ClientRegisterCommand, SectorVec, ClientRegisterCommandContent, RegisterCommand,
+        SystemRegisterCommand, SystemRegisterCommandContent, SystemCommandHeader, SECTOR_VEC_SIZE};
     use crate::RegisterCommand::{Client, System};
     use uuid::Uuid;
     use std::convert::TryInto;
@@ -8,7 +9,7 @@ pub mod serialize_deserialize {
     pub const READ: u8 = 0x01;
     pub const WRITE: u8 =0x02;
 
-    pub fn serialize_client_command(cmd: &ClientRegisterCommand, writer: &mut dyn Write) -> Result<(), Error> {
+    pub fn serialize_client_command(cmd: &ClientRegisterCommand, writer: &mut dyn Write) -> Result<()> {
         let mut content = vec![0, 0, 0];
         let msg_type = match &cmd.content {
             ClientRegisterCommandContent::Read => READ,
@@ -29,39 +30,31 @@ pub mod serialize_deserialize {
         writer.write_all(&content)
     }
 
-    pub fn deserialize_client_command(data: &mut dyn Read, msg_type: u8) -> Option<Result<RegisterCommand, Error>> {
-        if msg_type != READ && msg_type != WRITE {
-            return None;
-        }
-
+    pub fn deserialize_client_command(data: &mut dyn Read, msg_type: u8) -> Result<RegisterCommand> {
         let mut buffer: [u8; 16] = [0; 16];
-        if let Err(err) = data.read_exact(&mut buffer) {
-            return Some(Err(err));
-        }
+        data.read_exact(&mut buffer)?;
 
         let request_identifier = u64::from_be_bytes(buffer[..8].try_into().expect("request_identifier"));
         let sector_idx = u64::from_be_bytes(buffer[8..].try_into().expect("sector_idx"));
         let header = ClientCommandHeader { request_identifier, sector_idx };
         match msg_type {
             READ => {
-                Some(Ok(Client(ClientRegisterCommand {
+                Ok(Client(ClientRegisterCommand {
                     header,
                     content: ClientRegisterCommandContent::Read,
-                })))
+                }))
             },
             WRITE => {
                 let mut content = SectorVec::new();
-                if let Err(err) = data.read_exact(content.0.as_mut_slice()) {
-                    return Some(Err(err));
-                }
-                Some(Ok(Client(ClientRegisterCommand {
+                data.read_exact(content.0.as_mut_slice())?;
+                Ok(Client(ClientRegisterCommand {
                     header,
                     content: ClientRegisterCommandContent::Write { data: content, }
-                })))
+                }))
             },
             _ => {
-                // this should never happen because of if in the beginning
-                Some(Err(Error::new(ErrorKind::Other, format!("[UNEXPECTED] unknown client msg_type: {}", msg_type))))
+                // this should never happen because of if in deserialize_register_command
+                Err(Error::new(ErrorKind::Other, format!("[UNEXPECTED] unknown client msg_type: {}", msg_type)))
             }
         }
     }
@@ -71,7 +64,7 @@ pub mod serialize_deserialize {
     pub const WRITE_PROC: u8 = 0x05;
     pub const ACK: u8 = 0x06;
 
-    pub fn serialize_system_command(cmd: &SystemRegisterCommand, writer: &mut dyn Write) -> Result<(), Error> {
+    pub fn serialize_system_command(cmd: &SystemRegisterCommand, writer: &mut dyn Write) -> Result<()> {
         let mut content = vec![0, 0, cmd.header.process_identifier];
         let msg_type = match &cmd.content {
             SystemRegisterCommandContent::ReadProc => READ_PROC,
@@ -117,15 +110,13 @@ pub mod serialize_deserialize {
         writer.write_all(&content)
     }
 
-    pub fn deserialize_system_command(data: &mut dyn Read, process_identifier: u8, msg_type: u8) -> Result<RegisterCommand, Error> {
+    pub fn deserialize_system_command(data: &mut dyn Read, process_identifier: u8, msg_type: u8) -> Result<RegisterCommand> {
         if msg_type != READ_PROC && msg_type != VALUE && msg_type != WRITE_PROC && msg_type != ACK {
             return Err(Error::new(ErrorKind::Other, format!("unknown system msg_type: {}", msg_type)));
         }
 
         let mut buffer: [u8; 32] = [0; 32];
-        if let Err(err) = data.read_exact(&mut buffer) {
-            return Err(err);
-        }
+        data.read_exact(&mut buffer)?;
 
         let msg_ident = Uuid::from_bytes(buffer[..16].try_into().expect("msg_ident"));
         let read_ident = u64::from_be_bytes(buffer[16..24].try_into().expect("read_ident"));
@@ -140,9 +131,7 @@ pub mod serialize_deserialize {
             },
             VALUE => {
                 let mut buffer: [u8; 16 + SECTOR_VEC_SIZE] = [0; 16 + SECTOR_VEC_SIZE];
-                if let Err(err) = data.read_exact(&mut buffer) {
-                    return Err(err);
-                }
+                data.read_exact(&mut buffer)?;
                 let timestamp = u64::from_be_bytes(buffer[..8].try_into().expect("timestamp"));
                 let write_rank = buffer[15];
                 let sector_data = SectorVec(buffer[16..].to_vec());
@@ -158,9 +147,7 @@ pub mod serialize_deserialize {
             },
             WRITE_PROC => {
                 let mut buffer: [u8; 16 + SECTOR_VEC_SIZE] = [0; 16 + SECTOR_VEC_SIZE];
-                if let Err(err) = data.read_exact(&mut buffer) {
-                    return Err(err);
-                }
+                data.read_exact(&mut buffer)?;
                 let timestamp = u64::from_be_bytes(buffer[..8].try_into().expect("timestamp"));
                 let write_rank = buffer[15];
                 let data_to_write = SectorVec(buffer[16..].to_vec());

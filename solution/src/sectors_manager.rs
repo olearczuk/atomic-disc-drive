@@ -42,6 +42,8 @@ pub mod sectors_manager {
             create_dir_all(&path).unwrap();
             create_dir_all(&metadata_path).unwrap();
 
+            // preprocess metadata_info_map and metadata_total_size
+            // thanks to that initial linear work, we will be able to access metadata much faster
             let mut file_number = 0;
             let mut metadata_total_size = 0;
             let mut metadata_info_map = HashMap::new();
@@ -75,6 +77,7 @@ pub mod sectors_manager {
         async fn read_data(&self, idx: SectorIdx) -> SectorVec {
             let metadata_offset_map = self.metadata_info_map.lock().await;
             match metadata_offset_map.get(&idx) {
+                // if there is no info in metadata, then write failed after data was written
                 None => SectorVec::new(),
                 Some(_) => {
                     match read(&self.path, &idx.to_string()).await {
@@ -116,6 +119,7 @@ pub mod sectors_manager {
                 let mut metadata_info_map = self.metadata_info_map.lock().await;
                 let mut metadata_total_size = self.metadata_total_size.lock().await;
 
+                // get file and offset related to this sector
                 let (filename, offset) = match metadata_info_map.get(&idx) {
                     None => {
                         let file_number = *metadata_total_size / METADATAS_FILE_SIZE;
@@ -125,11 +129,11 @@ pub mod sectors_manager {
                     Some((filename, offset)) => (filename.clone(), *offset)
                 };
 
+                // update file value (either by appending or modifying content)
                 let mut val = match read(&self.metadata_path, &filename).await {
                     None => vec![],
                     Some(vec) => vec,
                 };
-
                 if offset == val.len() {
                     val.append(&mut metadata_vec);
                 } else {
@@ -138,6 +142,7 @@ pub mod sectors_manager {
                     }
                 }
 
+                // write updated value of metadata file, update map if write is successful
                 if write(&self.metadata_path, &filename, &val.as_slice()).await.is_err() {
                     return
                 }

@@ -16,39 +16,21 @@ pub mod stable_storage {
         }
     }
 
-    pub async fn write(storage_dir: &PathBuf, key: &str, value: &[u8]) -> Result<(), String>{
+    pub async fn write(storage_dir: &PathBuf, key: &str, value: &[u8]) -> std::io::Result<()>{
+        // create tmp file, write to it and sync data
         let tempdir = temp_dir();
         let tmp_path = tempdir.join(Uuid::new_v4().to_string());
-        let file_res = tokio::fs::File::create(&tmp_path).await;
-        if file_res.is_err() {
-            return Err(file_res.err().unwrap().to_string());
-        }
-        let mut file = file_res.unwrap();
-        let res = file.write_all(value).await;
-        if res.is_err() {
-            return Err(res.err().unwrap().to_string());
-        }
-        let res = file.sync_data().await;
-        if res.is_err() {
-            return Err(res.err().unwrap().to_string());
-        }
+        let mut file = tokio::fs::File::create(&tmp_path).await?;
+        file.write_all(value).await?;
+        file.sync_data().await?;
 
+        // rename to destination file
         let key_path = storage_dir.join(key);
-        let rename_res = tokio::fs::rename(&tmp_path, key_path).await;
-        if rename_res.is_err() {
-            return Err(rename_res.err().unwrap().to_string());
-        }
+        tokio::fs::rename(&tmp_path, key_path).await?;
 
-        let dir_res = tokio::fs::File::open(storage_dir).await;
-        if dir_res.is_err() {
-            return Err(dir_res.err().unwrap().to_string());
-        }
-        let dir = dir_res.unwrap();
-        let res = dir.sync_data().await;
-        if res.is_err() {
-            return Err(res.err().unwrap().to_string());
-        }
-        Ok(())
+        // sync_data on directory
+        let dir = tokio::fs::File::open(storage_dir).await?;
+        dir.sync_data().await
     }
 
     pub async fn read(storage_dir: &PathBuf, key: &str) -> Option<Vec<u8>> {
@@ -59,7 +41,7 @@ pub mod stable_storage {
     #[async_trait::async_trait]
     impl StableStorage for StableStorageImplementation {
         async fn put(&mut self, key: &str, value: &[u8]) -> Result<(), String> {
-            write(&self.storage_dir, key, value).await
+            write(&self.storage_dir, key, value).await.map_err(|err| err.to_string())
         }
 
         async fn get(&self, key: &str) -> Option<Vec<u8>> {
