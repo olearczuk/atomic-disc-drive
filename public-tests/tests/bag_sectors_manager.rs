@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use std::path::PathBuf;
 
 #[tokio::test]
-#[timeout(200)]
+#[timeout(400)]
 async fn drive_can_store_data() {
     let _ = env_logger::builder().is_test(true).try_init();
 

@@ -28,13 +28,13 @@ async fn client_response_errors() {
     let storage_dir = tempdir().unwrap();
     let request_identifier = 1778;
 
-    let MAX_SECTOR = 20;
+    let max_sector = 20;
 
     let config = Configuration {
         public: PublicConfiguration {
             tcp_locations: vec![("127.0.0.1".to_string(), tcp_port)],
             self_rank: 1,
-            max_sector: MAX_SECTOR,
+            max_sector,
             storage_dir: storage_dir.into_path(),
         },
         hmac_system_key: [1; 64],
@@ -50,7 +50,7 @@ async fn client_response_errors() {
     let write_cmd_wrong_sector_idx = RegisterCommand::Client(ClientRegisterCommand {
         header: ClientCommandHeader {
             request_identifier,
-            sector_idx: MAX_SECTOR + 10,
+            sector_idx: max_sector + 10,
         },
         content: ClientRegisterCommandContent::Write {
             data: SectorVec(vec![3; 4096]),
@@ -83,7 +83,7 @@ async fn client_response_errors() {
     let write_cmd_wrong_hmac = RegisterCommand::Client(ClientRegisterCommand {
         header: ClientCommandHeader {
             request_identifier,
-            sector_idx: MAX_SECTOR-1,
+            sector_idx: max_sector -1,
         },
         content: ClientRegisterCommandContent::Write {
             data: SectorVec(vec![3; 4096]),

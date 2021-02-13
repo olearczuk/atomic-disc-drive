@@ -312,7 +312,6 @@ async fn make_values(mut register: Box<dyn AtomicRegister>, rx: Receiver<ClientM
         },
         _ => panic!("not matching"),
     };
-    println!("values");
     register
 }
 

@@ -14,35 +14,6 @@ use tokio::net::TcpStream;
 
 static HMAC_TAG_SIZE: usize = 32;
 
-// #[tokio::test]
-// #[timeout(400000)]
-async fn simple_system() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
-    let storage_dir = tempdir().unwrap();
-    let hmac_client_key = [0x61; 32]; // 0x61 == 'a'
-    // let hmac_client_key = [0x5; 32];
-
-    let tcp_port = 10_000;
-
-    let config = Configuration {
-        public: PublicConfiguration {
-            tcp_locations: vec![("127.0.0.1".to_string(), tcp_port)],
-            self_rank: 1,
-            max_sector: 20,
-            storage_dir: storage_dir.into_path(),
-        },
-        hmac_system_key: [1; 64],
-        hmac_client_key,
-    };
-
-    println!("before spawn");
-    let handle = tokio::spawn(run_register_process(config));
-    tokio::join!(handle);
-}
-
-
-
 #[tokio::test]
 #[timeout(4000)]
 async fn garbage_sliding_window_test() {

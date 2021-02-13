@@ -1,4 +1,5 @@
-use assignment_2_solution::{run_register_process, serialize_register_command, ClientCommandHeader, ClientRegisterCommand, ClientRegisterCommandContent, Configuration, PublicConfiguration, RegisterCommand, SectorVec, MAGIC_NUMBER, deserialize_register_command};
+use assignment_2_solution::{run_register_process, serialize_register_command, ClientCommandHeader, ClientRegisterCommand,
+    ClientRegisterCommandContent, Configuration, PublicConfiguration, RegisterCommand, SectorVec, MAGIC_NUMBER};
 use hmac::{Hmac, Mac, NewMac};
 use ntest::timeout;
 use sha2::Sha256;
@@ -7,8 +8,6 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use std::ops::Deref;
-use std::thread::sleep;
 
 static HMAC_TAG_SIZE: usize = 32;
 
@@ -102,7 +101,7 @@ async fn one_reads_other_writes() {
 
 
 #[tokio::test]
-#[timeout(5000)]
+#[timeout(10000)]
 async fn multiple_reads_and_writes(){
     const EXPECTED_RESPONSES_SIZE: usize = 48;
     let hmac_client_key = [5; 32];
@@ -144,7 +143,7 @@ async fn multiple_reads_and_writes(){
         .await.expect("couldnt connect to tcp port");
 
     for i in 0..10{
-        let mut write_cmd = RegisterCommand::Client(ClientRegisterCommand {
+        let write_cmd = RegisterCommand::Client(ClientRegisterCommand {
             header: ClientCommandHeader {
                 request_identifier: request_identifier + i as u64,
                 sector_idx: 253 as u64,
@@ -173,7 +172,7 @@ async fn multiple_reads_and_writes(){
     }
     // when
     for i in 0..10 {
-        let mut read_cmd = RegisterCommand::Client(ClientRegisterCommand {
+        let read_cmd = RegisterCommand::Client(ClientRegisterCommand {
             header: ClientCommandHeader {
                 request_identifier: request_identifier + 100 + i,
                 sector_idx: 253 as u64,
@@ -201,7 +200,7 @@ async fn multiple_reads_and_writes(){
 }
 
 #[tokio::test]
-#[timeout(20000)]
+#[timeout(5000)]
 async fn recovery() {
     // given
     let hmac_client_key = [5; 32];
@@ -262,13 +261,13 @@ async fn recovery() {
     send_cmd(&write_cmd, &mut stream, &hmac_client_key.clone()).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    // the other process did not get started, so there was write in progress
+    // the other process did not get started, so there is write in progress
     handle.abort();
 
     tokio::spawn(run_register_process(config2));
     tokio::spawn(run_register_process(config_));
 
-    tokio::time::sleep(Duration::from_millis(6000)).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
     let mut stream = TcpStream::connect(("127.0.0.1", tcp_port_))
         .await.expect("couldnt connect to tcp port");
 
@@ -295,7 +294,7 @@ async fn recovery() {
 }
 
 #[tokio::test]
-#[timeout(20000)]
+#[timeout(5000)]
 async fn retry_connecting() {
     // given
     let hmac_client_key = [5; 32];
@@ -363,7 +362,7 @@ async fn retry_connecting() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     tokio::spawn(run_register_process(config2));
 
-    tokio::time::sleep(Duration::from_millis(6000)).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
     let mut stream = TcpStream::connect(("127.0.0.1", tcp_port_))
         .await.expect("couldnt connect to tcp port");
 
